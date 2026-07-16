@@ -9,7 +9,7 @@ from rapidfuzz import fuzz
 
 logging.basicConfig(level=logging.INFO)
 
-TOKEN = "8862234704:AAG-yZpZONxe2P2YRep_gIQCpOzOWAG_KdU"
+TOKEN = os.environ.get("BOT_TOKEN")
 PORT = int(os.environ.get("PORT", 10000))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://jaquar-price-bot.onrender.com")
 
@@ -173,3 +173,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
