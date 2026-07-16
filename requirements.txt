@@ -1,0 +1,5 @@
+python-telegram-bot==21.5
+polars==0.20.31
+rapidfuzz==3.6.1
+openpyxl==3.1.2
+aiohttp==3.9.5
