@@ -11,6 +11,8 @@ from telegram.ext import (
 )
 import polars as pl
 from rapidfuzz import fuzz
+from crm import register_crm_handlers
+import db
 
 logging.basicConfig(level=logging.INFO)
 
@@ -24,30 +26,20 @@ for _id in os.environ.get("ADMIN_IDS", "").split(","):
     if _id.isdigit():
         ADMIN_IDS.add(int(_id))
 
-USERS_FILE = "users.json"
 MAX_LOG_ENTRIES = 500
 
-def load_users():
-    if os.path.exists(USERS_FILE):
-        try:
-            with open(USERS_FILE, "r") as f:
-                data = json.load(f)
-                data.setdefault("approved", [])
-                data.setdefault("blocked", [])
-                data.setdefault("pending", {})
-                data.setdefault("logs", [])
-                data.setdefault("profiles", {})
-                data.setdefault("search_count", 0)
-                return data
-        except:
-            pass
-    return {"approved": [], "blocked": [], "pending": {}, "logs": [], "profiles": {}, "search_count": 0}
+DEFAULT_USERS_DATA = {"approved": [], "blocked": [], "pending": {}, "logs": [], "profiles": {}, "search_count": 0}
+users_data = dict(DEFAULT_USERS_DATA)
 
-def save_users(data):
-    with open(USERS_FILE, "w") as f:
-        json.dump(data, f)
+async def load_users():
+    global users_data
+    data = await db.load_json("users_data", DEFAULT_USERS_DATA)
+    for k, v in DEFAULT_USERS_DATA.items():
+        data.setdefault(k, v)
+    users_data = data
 
-users_data = load_users()
+async def save_users(data):
+    await db.save_json("users_data", data)
 
 def is_approved(uid):
     return uid in ADMIN_IDS or uid in users_data["approved"]
@@ -184,7 +176,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uid = user.id
     touch_profile(user)
-    save_users(users_data)
+    await save_users(users_data)
 
     if is_blocked(uid):
         await update.message.reply_text("🚫 Tumhe block kiya gaya hai. Admin se contact karo.")
@@ -204,7 +196,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "name": user.full_name,
         "username": user.username or "N/A",
     }
-    save_users(users_data)
+    await save_users(users_data)
 
     await update.message.reply_text("⏳ Request bheji gayi hai, admin approve karega tabhi bot use kar paoge.")
 
@@ -243,7 +235,7 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     users_data["search_count"] += 1
     add_log(uid, user.full_name, text)
-    save_users(users_data)
+    await save_users(users_data)
 
     if results:
         total = len(results)
@@ -299,7 +291,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if target not in users_data["approved"]:
                 users_data["approved"].append(target)
             users_data["pending"].pop(str(target), None)
-            save_users(users_data)
+            await save_users(users_data)
             await query.edit_message_text(f"✅ Approved: {name_for(target)}")
             try:
                 await context.bot.send_message(target, "✅ Tumhara access approve ho gaya! Ab product code bhej ke price dekh sakte ho.")
@@ -307,7 +299,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         else:
             users_data["pending"].pop(str(target), None)
-            save_users(users_data)
+            await save_users(users_data)
             await query.edit_message_text(f"❌ Rejected: {name_for(target)}")
             try:
                 await context.bot.send_message(target, "❌ Tumhari access request reject ho gayi.")
@@ -394,7 +386,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             users_data["approved"].remove(target)
         if target not in users_data["blocked"]:
             users_data["blocked"].append(target)
-        save_users(users_data)
+        await save_users(users_data)
         await query.answer("Blocked!")
         try:
             await context.bot.send_message(target, "🚫 Tumhe block kar diya gaya hai.")
@@ -415,7 +407,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = int(data.split("_")[1])
         if target in users_data["approved"]:
             users_data["approved"].remove(target)
-        save_users(users_data)
+        await save_users(users_data)
         await query.answer("Access hataya gaya!")
         rows = []
         for aid in users_data["approved"][:15]:
@@ -434,7 +426,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = int(data.split("_")[1])
         if target in users_data["blocked"]:
             users_data["blocked"].remove(target)
-        save_users(users_data)
+        await save_users(users_data)
         await query.answer("Unblocked!")
         try:
             await context.bot.send_message(target, "✅ Tumhara block hata diya gaya hai. /start bhejo dobara use karne ke liye.")
@@ -459,11 +451,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------- MAIN ----------------
 
 async def main():
+    await db.init_db()
+    await load_users()
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("panel", panel))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CallbackQueryHandler(
+        button_handler,
+        pattern="^(menu_|approve_|reject_|block_|unapprove_|unblock_|noop)"
+    ))
+
+    await register_crm_handlers(app, all_data, is_approved_fn=is_approved, is_admin_fn=is_admin)
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply))
 
     webhook_path = f"/webhook/{TOKEN}"
@@ -499,4 +500,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
